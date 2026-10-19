@@ -62,7 +62,19 @@ def norm_zh(s):
     return ''.join(c for c in s if unicodedata.category(c)[0] in 'LN')   # keep only letters/hanzi/digits; strip all punctuation and whitespace
 
 
+VIETNAMESE = re.compile(r'[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]', re.IGNORECASE)
+
+
+def norm_vi(s):
+    """Chuẩn hóa tiếng Việt: Unicode NFKC, chữ thường, bỏ tag cảm xúc [cười], bỏ dấu câu, chuẩn khoảng trắng."""
+    s = unicodedata.normalize('NFKC', s).lower()
+    s = re.sub(r'\[.*?\]', '', s)
+    s = re.sub(r'[^\w\s]', ' ', s)
+    return ' '.join(s.split())
+
+
 def detect_lang(texts):
+    if any(VIETNAMESE.search(t) for t in texts): return 'vi'
     cjk = sum(len(CJK.findall(t)) for t in texts); latin = sum(len(re.findall('[A-Za-z]', t)) for t in texts)
     return 'zh' if cjk and cjk >= 0.3 * (cjk + latin) else 'en'
 
@@ -71,6 +83,10 @@ def compare(want, got, lang, threshold=0.92):
     """Returns (passed or not, similarity 0..1)"""
     if lang in CHAR_LANGS:
         a, b = norm_zh(want), norm_zh(got)
+        r = difflib.SequenceMatcher(None, a, b).ratio() if (a or b) else 1.0
+        return r >= threshold, r
+    if lang == 'vi':
+        a, b = norm_vi(want), norm_vi(got)
         r = difflib.SequenceMatcher(None, a, b).ratio() if (a or b) else 1.0
         return r >= threshold, r
     a, b = norm_en(want), norm_en(got)
@@ -109,7 +125,7 @@ def main():
         y, sr = sf.read(os.path.join(a.voices_dir, L['id'] + '.wav'))
         if y.ndim > 1: y = y.mean(1)
         y = soxr.resample(y, sr, 16000, quality='HQ'); pad = np.zeros(int(.6 * 16000))   # same as librosa's default soxr_hq
-        kw = dict(initial_prompt='以下是普通话的句子。') if lang == 'zh' else {}          # prompt in Simplified Chinese so the transcription doesn't come out in Traditional
+        kw = dict(initial_prompt='Dưới đây là câu tiếng Việt.') if lang == 'vi' else (dict(initial_prompt='以下是普通话的句子。') if lang == 'zh' else {})
         segs, _ = m.transcribe(np.concatenate([pad, y, pad]).astype(np.float32), beam_size=5, language=lang, word_timestamps=True, **kw)
         tail = (len(y) + len(pad)) / 16000 - .5   # Whisper sometimes repeats the line inside the trailing pad: drop such no-speech segments
         segs = [s for s in segs if not (s.no_speech_prob > .5 and s.start > tail)]; got = ' '.join(s.text.strip() for s in segs)
